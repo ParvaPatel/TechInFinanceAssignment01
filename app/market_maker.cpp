@@ -126,6 +126,7 @@ void MarketMaker::OnTimer(sim::Timestamp now) {
     }
 
     Reconcile(now);
+    decisions_.Flush();
     latency_.Record(sim::DeliveryKind::Timer, now);
 }
 

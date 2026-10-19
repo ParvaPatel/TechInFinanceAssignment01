@@ -7,7 +7,7 @@
 // desired price differs from the resting one.
 //
 // Cold path: OnTimer samples the mid, updates volatility, checks the loss
-// limit, and reconciles the quote history.
+// limit, reconciles the quote history, and writes out the decision log.
 #pragma once
 
 #include <cstddef>
