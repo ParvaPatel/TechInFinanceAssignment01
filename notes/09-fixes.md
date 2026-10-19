@@ -58,11 +58,22 @@ Each fix lives on its own branch from `measurement` and is compared with the `me
 
 **Orders that follow a failed check**
 
-| Where | Measure | Before | After | Change | Noise floor |
+Measured directly, on the exact messages, with medians over 30 runs:
+
+| Where | Before | After | Change |
+|---|---|---|---|
+| gap: the halt's two cancels (sent while handling seq 9), n = 60 | 3,208 ns | 208 ns | **−94%** |
+| position: ask orders sent after the bid's check failed (seq 39 and 43), n = 60 | 1,792 ns | 167 ns | **−91%** |
+
+Scenario-wide figures that also moved beyond the noise floor (indirect: each mixes these orders with others):
+
+| Scenario | Measure | Before | After | Change | Noise floor |
 |---|---|---|---|---|---|
-| gap: the halt's cancels, sent after the gap is detected | tick-to-trade p50 | 4,000 ns | 417 ns | **−90%** | 0–14% |
-| position: ask orders sent after the bid's check failed | tick-to-trade p90 | 1,917 ns | 625 ns | **−67%** | 2–30% |
-| loss: orders around the blocked bid and the halt | tick-to-trade p50 | 459 ns | 334 ns | **−27%** | 0–14% |
+| gap | tick-to-trade p50 | 4,000 ns | 417 ns | −90% | 0–14% (bimodal median: 2 cold first orders + 2 cancels per run) |
+| position | tick-to-trade p90 | 1,917 ns | 625 ns | −67% | 2–30% |
+| loss | tick-to-trade p50 | 459 ns | 334 ns | −27% | 0–14% |
+
+*Correction (2026-10-19): an earlier version of this table attributed the `gap` p50 and `position` p90 figures directly to the halt's cancels and the post-throw orders. The direct measurements above replace that.*
 
 **Typical orders:** every order after the first two of a run went from 334 ns to 292 ns (−13%). That's within the noise floor, so we can't claim it.
 
@@ -79,8 +90,8 @@ The program's first exception cost about 35 µs, partly one-time start-up work. 
 
 The original "average latency" fell **74–87%** in every scenario. Judged by the old metric, this fix made the program 4–8× faster. The new report shows the real picture:
 - failed checks are 40× cheaper;
-- the halt's cancels go out 10× faster;
-- orders after a blocked side are faster;
+- the halt's cancels go out about 15× faster (3,208 → 208 ns);
+- orders sent after a failed bid check are about 11× faster (1,792 → 167 ns);
 - the typical order is unchanged.
 
 The old metric overstated the benefit because it's dominated by the first message and by no-order messages. That's a concrete example for the evaluation critique (#1).
@@ -89,8 +100,8 @@ The old metric overstated the benefit because it's dominated by the first messag
 
 - **Cost of a throw on this machine:** about 1.6–2.3 µs per message once warm; the first throw in the process about 35 µs.
 - **The doc's claim "once thrown, we are no longer in the hotpath" is false, with numbers:**
-  - the gap halt's cancels went out in about 4 µs instead of about 0.4 µs;
-  - orders after a blocked side were slower by about 1.3 µs at p90.
+  - the gap halt's cancels went out in a median of 3.2 µs instead of 0.21 µs;
+  - orders sent after a failed bid check took a median of 1.8 µs instead of 0.17 µs.
 - **The fix keeps the safety argument** (`[[nodiscard]]`) and the exact behaviour (`make verify`, identical logs).
 - **Be honest about the limits:**
   - the typical order didn't get measurably faster;
@@ -183,7 +194,7 @@ python3 bench/breakdown.py fix-decision-log
 |---|---|---|
 | Tick-to-trade p50, all scenarios | 416 → 334 ns (−20%) | 416 → **125 ns (−70%)** |
 | Typical order (after the first two) | 334 → 292 ns (−13%, within noise) | 334 → **83 ns (−75%)** |
-| Where it helps most | Messages whose check fails (40× cheaper), halt cancels (10× faster), orders after a blocked side | **Every order** |
+| Where it helps most | Messages whose check fails (40× cheaper), halt cancels (15× faster), orders after a failed bid check (11× faster) | **Every order** |
 | **Original metric** (median of per-run averages) | **−74% to −87%** | **−4% to −15%** |
 
 **The original metric ranks the two fixes backwards.** It reports fix A as a 4–8× improvement and fix B as almost nothing. For the latency that matters, how fast orders leave, fix B is by far the bigger win:
@@ -206,7 +217,9 @@ This is the strongest single piece of evidence for the evaluation critique (#1).
 | Tick-to-trade p90, all scenarios | 5,417 ns | 6,542 | 2,625 | **2,416 ns (−55%)** |
 | Typical order (after the first two of a run) | 334 ns | 292 | 83 | **83 ns (−75%)** |
 | 1st order of each run | 4,646 ns | 5,959 | 1,958 | **1,896 ns (−59%)** |
-| `position` p90 (orders after a blocked side) | 1,917 ns | 625 | 1,708 | **292 ns (−85%)** |
+| `position` p90 | 1,917 ns | 625 | 1,708 | **292 ns (−85%)** |
+| Orders sent after a failed bid check (`position` seq 39 and 43, median) | 1,792 ns | 167 | 1,666 | **42 ns (−98%)** |
+| The gap halt's cancels (median) | 3,208 ns | 208 | 3,084 | **125 ns (−96%)** |
 | Feed messages whose check fails | 1.6–2.3 µs | 41 ns | 1.6–2.3 µs | **41 ns (−97 to −98%)** |
 | Messages that send no order (normal) | 42 ns | 41 | 42 | **41 ns** |
 
