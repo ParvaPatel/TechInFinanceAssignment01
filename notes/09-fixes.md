@@ -170,7 +170,7 @@ The total work is about the same. It now runs when no order is waiting.
 
 - **Measured cost of the decision log on the order path: about 250 ns per order,** about 75% of the typical tick-to-trade.
 - **The doc's safety argument doesn't survive scrutiny:**
-  - the original `fprintf` didn't make the log durable either: it was buffered and never flushed;
+  - the original `fprintf` didn't make the log durable either: lines sat in the `stdio` buffer until it filled or the program exited, and nothing flushed it explicitly;
   - the fix keeps the same kind of guarantee, losing at most 1 ms of entries;
   - true durability would need `fsync`, which takes milliseconds.
 - **The trade-off to state:** the log is written up to 1 ms later than before, and the timer tick now does the formatting.
