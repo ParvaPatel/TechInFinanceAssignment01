@@ -71,15 +71,14 @@ void MarketMaker::OnExecutionReport(std::span<const std::byte> bytes) {
 }
 
 void MarketMaker::Requote() {
-    BookTop top;
-    try {
-        risk_.CheckStanding();
-        top = book_.top();
-        RiskGate::CheckBook(top);
-    } catch (const RiskViolation& e) {
-        if (IsStanding(e.error()) && !halted_) {
-            Halt(e.what());
+    if (const RiskError standing = risk_.CheckStanding(); standing != RiskError::None) {
+        if (!halted_) {
+            Halt(Describe(standing));
         }
+        return;
+    }
+    const BookTop top = book_.top();
+    if (RiskGate::CheckBook(top) != RiskError::None) {
         // BookInvalid: skip this tick; resting quotes stay.
         return;
     }
@@ -93,9 +92,7 @@ void MarketMaker::Requote() {
 }
 
 void MarketMaker::QuoteSide(sim::Side side, sim::Price desired) {
-    try {
-        RiskGate::CheckPosition(side, orders_.position());
-    } catch (const RiskViolation&) {
+    if (RiskGate::CheckPosition(side, orders_.position()) != RiskError::None) {
         // This side is blocked; the other side still quotes.
         return;
     }
