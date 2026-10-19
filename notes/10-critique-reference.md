@@ -18,6 +18,14 @@
 
 Across 30 runs, this order's median tick-to-trade was 1,792 ns. About 1.6 µs of that was the exception and about 0.13 µs the decision log. With both of the fixes described below, it fell to 42 ns, a single tick of the clock.
 
+*Alternative for section 1, a typical execution.* At 1,205,000 ns in the `basic` scenario (sequence number 10), participant 2 bids for 100 shares at $100.01. The tap records the arrival, and `OnMarketData` copies the header out with `memcpy`, checks the sequence number, and decodes the AddOrder. The book looks up reference 10 in its flat array, adds 100 shares to the $100.01 slot of the bid ladder, and updates its cached best bid from $100.00 to $100.01. `Requote` passes the risk checks and computes the microprice as ($100.01 × 300 + $100.05 × 100) / 400 = $100.02, lower than before because the new best bid is thin. With no volatility sampled yet, the credit is $0.01. The bid is already at its desired price of $100.01, so nothing is sent for it. The ask should move from $100.04 to $100.03, so `SendQuote` takes token 5, appends to the history, writes the decision-log line with `fprintf`, builds a `ReplaceOrder` and calls `Send`. Across 30 runs, this order's median tick-to-trade was 354 ns. With the decision log moved off the order path it was 125 ns; the exception fix doesn't apply here, because nothing throws.
+
+| Candidate hot-path example (median order tick-to-trade, 30 runs) | Original | Fix A | Fix B | Both |
+|---|---|---|---|---|
+| `basic` seq 3: first quotes of a run (cold start, so avoid) | 5,083 ns | 6,312 | 2,209 | 2,375 |
+| `basic` seq 10: typical repricing, 1 order | 354 ns | 292 | 125 | 167 |
+| `position` seq 39: a check throws, then 1 order | 1,792 ns | 167 | 1,666 | 42 |
+
 **2. A flaw in the evaluation.** The evaluation reports one number: the time from each message's arrival to the end of its handler, averaged over every delivery, timer ticks included. That is not tick-to-trade. Tick-to-trade ends when an order leaves the application, and the capture tap already records that moment for every `Send`, but the report never uses it. Averaging over every delivery also dilutes the result with work that never produces an order. Across the seven scenarios, only 58 of 474 deliveries sent an order, and a delivery that sends nothing takes about 42 ns, against about 375 ns for one that does. A single mean also hides the slowest orders and is unstable: over 30 identical runs, the average for one scenario varied by a factor of up to 4.1, and in one run a single message (the first, at 34.8 µs) made up 73% of the average.
 
 As a result, the metric can rank things backwards. It reports the `quiet` scenario (921 ns) as about as fast as `basic` (910 ns), although `quiet`'s orders are the slowest of all seven scenarios, with a median tick-to-trade of 4.7 µs. It also rewards the wrong optimisation. Removing the exceptions lowered the reported average by 74–87% but improved the median tick-to-trade by only 20%. Moving the decision log off the order path lowered the average by only 4–15% but improved the median tick-to-trade by 70%.
@@ -66,6 +74,7 @@ All batches: 30 runs × 7 scenarios, M5 Pro, mains power, every run's orders che
 | Figure | Value | Source |
 |---|---|---|
 | Hot-path order (position seq 39): original / fix A / fix B / both | 1,792 / 167 / 1,666 / 42 ns | Direct measurement on the four batches; [notes/09](09-fixes.md) §5 |
+| Alternative hot-path order (basic seq 10): original / fix A / fix B / both | 354 / 292 / 125 / 167 ns | Direct measurement on the four batches |
 | Credit at 15 ms | $0.0123 | Volatility/credit calculation for `position`; recorded in [notes/07](07-design-decisions.md) §4 |
 | 58 of 474 deliveries sent an order; 73 throws | — | Trace counts, [notes/06](06-other-scenarios.md) §4, [notes/07](07-design-decisions.md) #9 |
 | No-order delivery vs order-sending delivery | 42 vs 375 ns | `baseline` batch, [notes/08](08-measurements.md) §4 |
