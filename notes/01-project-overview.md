@@ -291,4 +291,5 @@ Next:
 
 1. **Run each scenario** and look at what it produces. Done for `basic` ([03-reading-the-trace.md](03-reading-the-trace.md)) and for `gap`, `loss` and `position` (summary: [04-risk-scenarios.md](04-risk-scenarios.md); walkthroughs: [05-risk-walkthroughs.md](05-risk-walkthroughs.md)), and for `quiet`, `empty_side` and `sweep` ([06-other-scenarios.md](06-other-scenarios.md)). All seven scenarios are covered.
 2. **Judge the design decisions.** Done; see [07-design-decisions.md](07-design-decisions.md).
-3. **Measure.** Baseline and the new tick-to-trade report done; see [08-measurements.md](08-measurements.md). Next: the market-maker fixes.
+3. **Measure.** Baseline and the new tick-to-trade report done; see [08-measurements.md](08-measurements.md).
+4. **Market-maker fixes.** Fix A (exceptions) done; see [09-fixes.md](09-fixes.md). Next: fix B (decision log), then A + B.
