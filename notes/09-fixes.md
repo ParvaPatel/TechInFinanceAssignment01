@@ -8,6 +8,8 @@ Each fix lives on its own branch from `measurement` and is compared with the `me
 
 1. [How to read a comparison: the noise floor](#1-how-to-read-a-comparison-the-noise-floor)
 2. [Fix A: risk checks return values instead of throwing](#2-fix-a-risk-checks-return-values-instead-of-throwing)
+3. [Fix B: the decision log off the order path](#3-fix-b-the-decision-log-off-the-order-path)
+4. [A and B side by side, and what the old metric said](#4-a-and-b-side-by-side-and-what-the-old-metric-said)
 
 ---
 
@@ -101,3 +103,89 @@ bash bench/run.sh fix-exceptions
 python3 bench/compare.py measurement fix-exceptions
 python3 bench/breakdown.py fix-exceptions
 ```
+
+---
+
+## 3. Fix B: the decision log off the order path
+
+**Branch:** `fix-decision-log` (commit `2ce0eab`), from `measurement`, *without* fix A. **Decision:** #11 in [notes/07](07-design-decisions.md).
+
+### The change
+
+| | Before | After |
+|---|---|---|
+| `Record` (every order, inside `SendQuote`, before `Send`) | `fprintf` a formatted line: format six values, lock the file, copy into the `stdio` buffer, and sometimes a `write()` system call | Copy a fixed-size entry into a vector reserved before the run (4,096 entries): no formatting, no lock, no I/O |
+| `Note` (halt, reconciliation mismatch) | `fprintf` | The same kind of copy. The text is copied, because a halt reason can point into a short-lived exception |
+| Writing the text | Immediately | `Flush()`, called at the end of every timer tick (the cold path) and in the destructor at the end of the run. Same formats, same order |
+
+Files: [decision_log.h](../app/execution/decision_log.h); [market_maker.cpp](../app/market_maker.cpp) (one line in `OnTimer`); and the comment in [market_maker.h](../app/market_maker.h).
+
+**Unchanged:**
+- **Behaviour:** `make verify` passes 7/7, the tests pass, and all 210 runs matched their `.expected` orders.
+- **The log itself:** `decisions.log` is **byte-for-byte identical in all 7 scenarios**.
+
+**Durability:** the original also buffered its lines, losing up to about 4 KB of `stdio` buffer if the process died. Now at most one timer interval (1 ms) of entries is at risk.
+
+### Results (`python3 bench/compare.py measurement fix-decision-log`)
+
+**Tick-to-trade**
+
+| Measure | Before | After | Change | Noise floor |
+|---|---|---|---|---|
+| p50, all scenarios | 416 ns | **125 ns** | **−70%** | 0–14% |
+| p90, all scenarios | 5,417 ns | **2,625 ns** | **−52%** | 2–30% |
+| p50 per scenario | basic 333, loss 459, position 333, sweep 417 ns | 83, 125, 42, 125 ns | **−70% to −87%** | 0–14% |
+| Every order after the first two of a run | 334 ns | **83 ns** | **−75%** | — |
+| 1st order of each run | 4,646 ns | 1,958 ns | −58% | — |
+| 2nd order of each run | 5,709 ns | 2,708 ns | −53% | — |
+
+**What the log cost.** The typical order went from 334 ns to 83 ns. So about **250 ns of every order, three quarters of its tick-to-trade, was the decision log's `fprintf`**. The first orders improved too, because the first `fprintf` also had to set up the file's buffer.
+
+**Unchanged, as predicted:** messages that send no order (median 42 ns), including the throwing ones (1.6–2.3 µs). Fix B doesn't touch them, and fix A is not on this branch.
+
+**Where the work went: the timer.** The formatting moved, it didn't disappear.
+
+| Timer ticks (n = 4,770) | Before | After |
+|---|---|---|
+| Median | 0 ns | 41 ns |
+| p90 | 42 ns | 500 ns |
+| p99 | 208 ns | 4,542 ns, mostly each run's first flush, which sets up the file buffer |
+
+The total work is about the same. It now runs when no order is waiting.
+
+### For the critique and the interview
+
+- **Measured cost of the decision log on the order path: about 250 ns per order,** about 75% of the typical tick-to-trade.
+- **The doc's safety argument doesn't survive scrutiny:**
+  - the original `fprintf` didn't make the log durable either: it was buffered and never flushed;
+  - the fix keeps the same kind of guarantee, losing at most 1 ms of entries;
+  - true durability would need `fsync`, which takes milliseconds.
+- **The trade-off to state:** the log is written up to 1 ms later than before, and the timer tick now does the formatting.
+- **Production version:** a background thread, or a memory-mapped file, instead of the timer.
+
+### Reproducing
+
+```sh
+git checkout fix-decision-log
+make && make verify
+bash bench/run.sh fix-decision-log
+python3 bench/compare.py measurement fix-decision-log
+python3 bench/breakdown.py fix-decision-log
+```
+
+---
+
+## 4. A and B side by side, and what the old metric said
+
+| | Fix A: no exceptions | Fix B: log off the order path |
+|---|---|---|
+| Tick-to-trade p50, all scenarios | 416 → 334 ns (−20%) | 416 → **125 ns (−70%)** |
+| Typical order (after the first two) | 334 → 292 ns (−13%, within noise) | 334 → **83 ns (−75%)** |
+| Where it helps most | Messages whose check fails (40× cheaper), halt cancels (10× faster), orders after a blocked side | **Every order** |
+| **Original metric** (median of per-run averages) | **−74% to −87%** | **−4% to −15%** |
+
+**The original metric ranks the two fixes backwards.** It reports fix A as a 4–8× improvement and fix B as almost nothing. For the latency that matters, how fast orders leave, fix B is by far the bigger win:
+- Fix A mostly removes the cost of the first message (a 35 µs first throw) and of messages that send nothing, which is exactly what dominates an average over every delivery.
+- Fix B speeds up the orders themselves, which are 1 in 8 deliveries, so the average barely notices.
+
+This is the strongest single piece of evidence for the evaluation critique (#1). An engineer optimising against the original report would pick the wrong fix.
