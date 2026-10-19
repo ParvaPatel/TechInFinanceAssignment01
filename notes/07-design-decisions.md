@@ -2,7 +2,7 @@
 
 *Written 2026-10-19. Previous: [06-other-scenarios.md](06-other-scenarios.md).*
 
-> This is Claude's analysis of the 13 design decisions in the [design doc](../docs/design.pdf), prepared to help with understanding. Cost figures marked *estimate* are typical values, not measurements on this Mac; phase 5 is where they get measured. The assignment requires the critique itself to be written in your own words, and the collaboration statement should say that Claude Code helped analyse the design decisions.
+> This is Claude's analysis of the 13 design decisions in the [design doc](../docs/design.pdf), prepared to help with understanding. Decisions #1, #9, #11 and #13 have since been **measured** on this Mac ([notes/08](08-measurements.md), [notes/09](09-fixes.md)); their measured figures are marked below. Figures still marked *estimate* (#2, #7, #12) are typical values that were not measured. The assignment requires the critique itself to be written in your own words, and the collaboration statement should say that Claude Code helped analyse the design decisions.
 
 ## Contents
 
@@ -10,7 +10,7 @@
 2. [Recommended picks for the critique](#2-recommended-picks-for-the-critique)
 3. [Each decision in detail](#3-each-decision-in-detail)
 4. [Suggested hot-path execution for prompt 1](#4-suggested-hot-path-execution-for-prompt-1)
-5. [What still needs measuring](#5-what-still-needs-measuring)
+5. [What was measured afterwards](#5-what-was-measured-afterwards)
 
 ---
 
@@ -68,6 +68,12 @@ Why these: #1, #9 and #11 have the clearest mechanism, the largest likely cost, 
 3. **Wrong statistic.** A mean hides the slow cases, the tail, which is what matters in trading. In `basic`, the reported average ranged from 1.3 to 2.6 µs across identical runs, and a single number can't show why.
 
 **What's fine.** The instrumentation is cheap and well designed: preallocated, one clock read per handler, no I/O, and the clock is shared with the tap.
+
+**Measured since** ([notes/08](08-measurements.md), [notes/09](09-fixes.md) §4). All three problems are confirmed:
+- the old average varies up to 4.1× between identical runs;
+- it ranks `quiet` among the fast scenarios, though its orders are the slowest (4.7 µs median);
+- it counts about 166 ns of work done after the first order of a two-order delivery has left;
+- it **ranks fixes A and B backwards**: −74 to −87% for A, −4 to −15% for B, while real tick-to-trade improved −20% and −70%.
 
 **Fix.**
 - For each order sent: **tick-to-trade = send time − arrival time of its delivery**, both from the tap.
@@ -196,7 +202,7 @@ Why these: #1, #9 and #11 have the clearest mechanism, the largest likely cost, 
 
 **The app throws more often than it trades.**
 
-**What a throw costs** (*estimate*: around a microsecond or more when warm, much more the first time):
+**What a throw costs** (**measured** on this Mac: about **1.6–2.3 µs** per message once warm, against 41 ns for a message that doesn't throw; about **35 µs** for the first throw of the process; [notes/08](08-measurements.md) §5, [notes/09](09-fixes.md) §2):
 1. Memory is allocated for the exception object. Here a second allocation copies the message string, because `std::runtime_error` stores its own copy.
 2. The runtime walks the stack twice using unwind tables: once to find a matching `catch`, once to clean up.
 3. The exception's type is matched against the `catch` clause.
@@ -247,7 +253,7 @@ These conditions are routine business events, not exceptional errors.
 
 **How often.** Every order (88 across our runs), always inside the tick-to-trade window.
 
-**What it costs** (*estimate*):
+**What it costs** (**measured**: about **250 ns per order**, roughly three quarters of the typical tick-to-trade. Removing it took the typical order from 334 to 83 ns; [notes/09](09-fixes.md) §3). The mechanism:
 - **On every line,** `fprintf` parses the format string, converts six values to text, locks the file, and copies the text into a buffer. That's hundreds of nanoseconds per line.
 - **Every few KB,** about every 100 lines, the buffer fills and `fprintf` calls `write()`, a system call into the kernel. That can take microseconds, and longer if the disk is busy.
 
@@ -306,7 +312,7 @@ These conditions are routine business events, not exceptional errors.
 1. **The order-sending path runs on only about 1 in 8 deliveries** (58 of 474): `SendQuote`, the history, the decision log, encoding, `Send`. It's the coldest part of the code, at exactly the moment speed matters most.
 2. **The data isn't small:** a 16 MB order table plus 3.2 MB of ladders.
 3. **Real markets have quiet periods.** Other processes, the operating system and interrupts push our code and data out of the caches, and the branch predictor forgets. The first message after a lull, often the big market move, runs cold. Idle cores also slow their clock.
-4. **Our runs show the cold-start effect.** These runs are tiny, so cold-start effects dominate, and the averages varied 2× between identical runs.
+4. **Our runs show the cold-start effect.** These runs are tiny, so cold-start effects dominate, and the averages varied 2× between identical runs. **Measured since:** the first order of each run takes 4.3–4.6 µs against 334 ns for later orders ([notes/08](08-measurements.md) §5). After fixes A and B it's still 1.9 µs against 83 ns ([notes/09](09-fixes.md) §6): the cold order path is now the slowest part.
 
 **Fix.**
 - Keep the order path warm: periodically run it on dummy data *without* calling `Send`. That means building the order message and touching the history and log buffers. Also touch the important data at startup.
@@ -340,11 +346,15 @@ The simpler alternative is `basic` seq 3 at 5,000 ([notes/03](03-reading-the-tra
 
 ---
 
-## 5. What still needs measuring
+## 5. What was measured afterwards
 
-Phase 5, in order:
-
-1. **Build the corrected evaluation:** tick-to-trade per order from the tap, reporting the count, median, 99th percentile and maximum, with no-order deliveries and timer ticks reported separately.
-2. **Generate a larger workload,** a scenario with thousands of messages, kept outside `sim/`.
-3. **Measure the suspects:** the cost per throw and the throw counts; the time spent in `log_.Record`; the history reallocations.
-4. **Apply each fix one at a time,** run `make verify`, and compare the distributions over many runs.
+| Plan item | Status |
+|---|---|
+| Build the corrected evaluation (tick-to-trade per order, percentiles, other groups separate) | **Done:** `measurement` branch, [notes/08](08-measurements.md) |
+| Generate a larger workload | **Not done.** Instead, 30 runs per scenario were pooled (1,980 tick-to-trade samples per batch). Limitation: every run is a fresh, short process, so cold-start effects are over-represented |
+| Cost per throw | **Done:** 1.6–2.3 µs warm, about 35 µs for the first throw |
+| Throw counts | **From the traces** (73 throws vs 58 order-sending deliveries), not counted by instrumentation |
+| Time spent in the decision log | **Done**, via fix B: about 250 ns per order |
+| History reallocations (#12) | **Not measured** |
+| Each fix one at a time, then combined | **Done:** fix A, fix B, A + B, [notes/09](09-fixes.md) |
+| Cold first orders (#13) | **Measured, not fixed:** 4.3–4.6 µs before the fixes, still 1.9 µs after both, against 83 ns for later orders |
