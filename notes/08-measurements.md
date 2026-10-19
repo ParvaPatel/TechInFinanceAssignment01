@@ -120,7 +120,9 @@ From [bench/breakdown.py](../bench/breakdown.py):
 3. **Tick-to-trade has two modes.** The median is 375 ns, but the 90th percentile is 4.9 µs. The slow mode is the first orders of each run: **4.3–4.6 µs for the first order, against 334 ns for later ones**, because the order path is cold.
 4. **A throw costs about 1.6–2.3 µs per message,** 40–55× the 41 ns of a message that doesn't throw. All three kinds of throw (sequence gap, book invalid, position limit) cost about the same.
 5. **Measurement conditions matter.** Running on battery instead of mains power raised every median by 15–31%.
-6. **Resolution limit.** With 41.7 ns clock ticks, differences smaller than a tick per sample can't be resolved. Compare distributions over many samples instead.
+6. **The original end point adds work done after the order left.** For deliveries that sent orders (`baseline`, n = 1,740), the handler finished a median 41 ns after the *last* order went out. But it finished a median **166 ns** after the *first* order went out (90th percentile: 1,000 ns). In a delivery that sends a bid and an ask, the bid's real tick-to-trade is shorter than the handler time the old metric records.
+7. **The original metric ranks the scenarios wrongly.** By the old average, `quiet` (921 ns) looks about as fast as `basic` (910 ns). Its real tick-to-trade median is **4,708 ns**, the slowest of all seven, against `basic`'s 292 ns. Its many cheap no-order messages dilute the slow orders out of the average.
+8. **Resolution limit.** With 41.7 ns clock ticks, differences smaller than a tick per sample can't be resolved. Compare distributions over many samples instead.
 
 ---
 
@@ -128,7 +130,7 @@ From [bench/breakdown.py](../bench/breakdown.py):
 
 | Decision ([notes/07](07-design-decisions.md)) | Evidence so far |
 |---|---|
-| #1 Evaluation | Findings 1 and 3. The same runs give "average 910 ns" under the old metric, but tick-to-trade p50 375 ns, p90 4.9 µs and p99 8.5 µs under the new one. The average hides both the typical order and the slow tail |
+| #1 Evaluation | Findings 1, 3, 6 and 7. All three parts of the hypothesis hold: wrong messages and wrong statistic strongly, wrong end point moderately (166 ns median for the first order of a two-order delivery). The same runs give "average 910 ns" under the old metric, but tick-to-trade p50 375 ns, p90 4.9 µs and p99 8.5 µs under the new one, and the old metric ranks `quiet` among the fast scenarios although its orders are the slowest |
 | #9 Exceptions | Finding 4: about 1.6–2.3 µs per throwing message, on a code path the doc calls free. Together with the counts in notes/07 (73 throws against 58 order-sending deliveries) |
 | #13 No warm-up | Finding 3: the first use of the order path is 13–17× slower than later uses |
 | #11 Decision log | Not yet isolated. Finding 2 shows the order path costs about 300 ns more than a no-order delivery; fix B will show how much of that is the log |
