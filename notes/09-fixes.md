@@ -10,6 +10,8 @@ Each fix lives on its own branch from `measurement` and is compared with the `me
 2. [Fix A: risk checks return values instead of throwing](#2-fix-a-risk-checks-return-values-instead-of-throwing)
 3. [Fix B: the decision log off the order path](#3-fix-b-the-decision-log-off-the-order-path)
 4. [A and B side by side, and what the old metric said](#4-a-and-b-side-by-side-and-what-the-old-metric-said)
+5. [A + B combined](#5-a--b-combined)
+6. [Summary: baseline vs both fixes](#6-summary-baseline-vs-both-fixes)
 
 ---
 
@@ -189,3 +191,44 @@ python3 bench/breakdown.py fix-decision-log
 - Fix B speeds up the orders themselves, which are 1 in 8 deliveries, so the average barely notices.
 
 This is the strongest single piece of evidence for the evaluation critique (#1). An engineer optimising against the original report would pick the wrong fix.
+
+---
+
+## 5. A + B combined
+
+**Branch:** `fix-combined` (commit `e3d6781`): fix B, plus fix A's commit applied on top. The two fixes touch different parts of the code (`risk.h` and the risk checks in `market_maker.cpp`; `decision_log.h` and one line in `OnTimer`), so they combined without conflicts. `make verify` passes 7/7, the tests pass, all 210 runs matched their orders, and `decisions.log` is identical in all 7 scenarios.
+
+### Results (`python3 bench/compare.py measurement fix-combined`)
+
+| Measure | `measurement` | Fix A | Fix B | **A + B** |
+|---|---|---|---|---|
+| Tick-to-trade p50, all scenarios | 416 ns | 334 | 125 | **84 ns (−80%)** |
+| Tick-to-trade p90, all scenarios | 5,417 ns | 6,542 | 2,625 | **2,416 ns (−55%)** |
+| Typical order (after the first two of a run) | 334 ns | 292 | 83 | **83 ns (−75%)** |
+| 1st order of each run | 4,646 ns | 5,959 | 1,958 | **1,896 ns (−59%)** |
+| `position` p90 (orders after a blocked side) | 1,917 ns | 625 | 1,708 | **292 ns (−85%)** |
+| Feed messages whose check fails | 1.6–2.3 µs | 41 ns | 1.6–2.3 µs | **41 ns (−97 to −98%)** |
+| Messages that send no order (normal) | 42 ns | 41 | 42 | **41 ns** |
+
+**Do the savings add up?** In absolute terms, roughly yes, within noise:
+- Tick-to-trade p50: A saved 82 ns, B saved 291 ns, a sum of 373 ns. Together they saved 332 ns.
+- `position` p90: 1,292 + 209 = 1,501 ns separately, against 1,625 ns together.
+
+The fixes remove different costs (a throw vs a `fprintf`), mostly on different messages, so they neither help nor hinder each other. Fix A's side effect (a slower first order) doesn't appear on top of fix B, because the first order no longer pays for setting up the log file's buffer.
+
+**Treat with care:** the `gap` p50 (4,000 → 1,458 ns). `gap` has only 4 orders per run: 2 cold first orders and 2 halt cancels. Its median sits between those two groups, so it's unstable. As always, the p99 values (here `quiet` +73%, on 60 samples) are just the few slowest orders.
+
+---
+
+## 6. Summary: baseline vs both fixes
+
+| | Before (`measurement`) | After both fixes | |
+|---|---|---|---|
+| Typical order's tick-to-trade | 334 ns | **83 ns** | **4× faster** |
+| Median tick-to-trade, all scenarios | 416 ns | **84 ns** | −80% |
+| 90th percentile, all scenarios | 5.4 µs | **2.4 µs** | −55% |
+| A message whose risk check fails | 1.6–2.3 µs | **41 ns** | about 40–55× faster |
+| Orders | — | **Identical** (`make verify`, 210/210 runs) | |
+| `decisions.log` | — | **Byte-for-byte identical** | |
+
+**What's left.** The slowest orders are now the **first orders of each run**: about 1.9–2.8 µs, against 83 ns later. That's the cold order path, decision #13 (no warm-up). Part of it is likely the first allocation of the quote history vector, decision #12. These are good points to mention as further work in the critique or the interview. They aren't measured as fixes here.
