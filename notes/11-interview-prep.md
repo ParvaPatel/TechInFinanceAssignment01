@@ -32,6 +32,7 @@ The model answers below are for practice, so you can explain each point in your 
 7. [Flaw 2: the decision log before every send](#7-flaw-2-the-decision-log-before-every-send)
 8. [Both fixes, and what's left](#8-both-fixes-and-whats-left)
 9. [The eight most likely questions](#9-the-eight-most-likely-questions)
+10. [Glossary: every term in the critique](#10-glossary-every-term-in-the-critique)
 
 ---
 
@@ -292,3 +293,81 @@ Practise these aloud until each answer takes under a minute without notes:
 6. Why `[[nodiscard]]` status values and not another fix? Is it as safe?
 7. Why is the decision log slow, and does it really protect against crashes?
 8. What did each fix change, what's left, and what would you do next?
+
+---
+
+## 10. Glossary: every term in the critique
+
+**Tick-to-trade:** the time from a market data message (the tick) reaching the program to the order it causes leaving it (the trade). Here it is measured from the capture tap's arrival stamp, just before `OnMarketData`, to its order-out stamp at the start of `Send`. It does **not** include the simulated network delays, it is **not** the whole handler time, and it is **not** simulated time.
+
+### Market terms
+
+| Term | One-line meaning |
+|---|---|
+| Market maker | A firm that always shows a price to buy (bid) and to sell (ask), earning the difference |
+| Bid / ask | An order to buy / an order to sell |
+| Order book | All resting buy and sell orders, sorted by price |
+| Best bid / best ask | The highest buy price / the lowest sell price on the book |
+| Microprice | Fair value: the best bid and ask weighted by the *opposite* side's size, so it leans toward the thinner side |
+| Credit | Distance from fair value to our quotes: at least $0.01, wider when the market is volatile |
+| Position / position limit | Shares held / ±500. A side is blocked if one more fill could break the limit |
+| Halt | Permanently stop quoting and cancel everything, after a missed feed message or a loss over $100 |
+| Order reference | The exchange's ID for a resting order. Later messages about it carry only this ID |
+
+### Messages and code names
+
+| Term | One-line meaning |
+|---|---|
+| Market data / feed message / tick | An exchange message describing a book change (Add, Executed, Cancel, Delete, Replace) |
+| Delivery | Anything handed to our program: a feed message, an execution report, or a timer tick |
+| Sequence number | Feed messages are numbered 1, 2, 3…; a skipped number means a lost message |
+| Header | The first bytes of a message: type, sequence number, timestamp |
+| `memcpy` / decoding | Copying raw message bytes into a struct so the fields can be read safely |
+| AddOrder / ReplaceOrder | Feed message: a new order is resting / our request to move an order to a new price |
+| Bid ladder | An array with one slot per cent of price, holding the total shares at each price |
+| Cached best bid | A copy of the best price and size, kept up to date so it's never searched for |
+| `Requote` / `QuoteSide` / `SendQuote` / `Send` | Re-decide both quotes / handle one side / record and send one order / hand the order to the exchange connection |
+| Quote history | An in-memory list of every quote sent |
+| Timer tick | A callback every 1 ms: samples volatility and checks P&L; never sends quotes |
+| Capture tap | The simulator's recorder: stamps when each delivery reaches us and when each order leaves |
+
+### Performance terms
+
+| Term | One-line meaning |
+|---|---|
+| Hot path | The code between a tick arriving and the order leaving, run on almost every message |
+| Handler | The function that processes one delivery (`OnMarketData`, `OnExecutionReport`, `OnTimer`) |
+| Mean / median / percentile / tail | Average / middle value / p90 = 90% at or below / the rare slow cases |
+| Clock tick | The clock's resolution, 41.7 ns; "42 ns" means about one tick |
+| Bounds check | Checking an index is inside the array before reading |
+| Memory load | One read from memory |
+| Cache / cache miss | Small fast memory by the CPU / data not there, fetched from main memory (about 100 ns vs about 1 ns) |
+| Hash map / node / pointer | A table finding items by hashing the key / each item stored separately / an address leading to it |
+| Allocate | Ask for new memory at run time: slow and unpredictable |
+| Dense table | No gaps: references 1, 2, 3… fill consecutive slots |
+
+### Exception terms
+
+| Term | One-line meaning |
+|---|---|
+| Exception / throw / catch | `throw` jumps out of the current code to the nearest matching `catch` |
+| "Free unless thrown" (zero-cost) | The normal path runs no extra instructions; all the cost is paid on throwing |
+| Unwinds the stack | The runtime walks back through the calls, using lookup tables, to find the `catch` and clean up |
+| Catch block | Code that runs after an exception is caught; the gap halt's cancels are sent from here |
+| Status value / `[[nodiscard]]` | A returned result instead of an exception / the compiler warns if it's ignored |
+
+### Decision log terms
+
+| Term | One-line meaning |
+|---|---|
+| `fprintf` | Formats values as text and writes them to a file through a buffer |
+| File lock | `fprintf` locks the file so two threads can't write at once |
+| `write` system call | Handing data from our program to the operating system: a switch into the kernel |
+| `stdio` buffer | A 4 KB block (measured) in our program's memory where `fprintf` collects text; written out every ~100 lines |
+| Flush / `fflush` | Push the buffer's contents to the operating system now |
+| Durability / `fsync` | Surviving a crash or power cut / forcing data onto the disk (milliseconds) |
+| Write-ahead log | Record what you're about to do before doing it, so you can recover after a crash |
+| Preallocated buffer | Memory reserved before the run, so storing an entry never allocates |
+| Typical order | Orders after the first two of each run; the first ones are slowed by start-up costs |
+
+**Most likely to cause a blank:** tick-to-trade, microprice, credit, unwinds the stack, zero-cost, cache miss, `stdio` buffer vs `fsync`, typical order.
